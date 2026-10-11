@@ -1,6 +1,6 @@
 config.json
-docker-compose.override.yml
+blocks.log
+build/
 .idea/
 node_modules/
-pool_configs/*.json
 npm-debug.log

@@ -1,0 +1,15 @@
+# Example systemd unit, adjust User and the paths, then copy to /etc/systemd/system/
+[Unit]
+Description=Verus solo stratum server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=orangepi
+WorkingDirectory=/home/orangepi/verus-stratum
+ExecStart=/usr/bin/node init.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

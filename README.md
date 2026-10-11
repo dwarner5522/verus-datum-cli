@@ -1,148 +1,173 @@
-# s-nomp: Some New Open Mining Portal
+# Verus solo stratum server
 
-> *NOTE*:
-> We're working on putting together an "official" s-nomp which can be supported by many coins and pools instead of so many running their own flavors. More to come!
+A small, command line only stratum server for solo mining [VerusCoin](https://verus.io) (VerusHash 2.2)
+with your own miners, for example a handful of Orange Pis running ccminer.
 
-This is a Equihash mining pool based off Node Open Mining Portal.
+It is a stripped down s-nomp: the website, payment processing, redis, profit switching, clustering and
+all other coins are gone. What is left is one Node.js process that talks to your Verus daemon, hands out
+work to your miners and tells you which miners are connected and how fast they are hashing.
 
-#### Production Usage Notice
-This is beta software. All of the following are things that can change and break an existing s-nomp setup: functionality of any feature, structure of configuration files and structure of redis data. If you use this software in production then *DO NOT* pull new code straight into production usage because it can and often will break your setup and require you to tweak things like config files or redis data. *Only tagged releases are considered stable.*
+* runs on ARM (Orange Pi, Raspberry Pi, ...) as well as x86 - the hashing code is plain C/C++
+* no npm dependencies, no database, about 60 MB of memory
+* interactive console plus a command line client for scripts and remote shells
 
-#### Paid Solution
-Usage of this software requires abilities with sysadmin, database admin, coin daemons, and sometimes a bit of programming. Running a production pool can literally be more work than a full-time job. 
+## Requirements
 
-### Community / Support
+* A synced Verus daemon (`verusd`) with RPC enabled, on the same machine or reachable over the network
+* [Node.js](https://nodejs.org) 12 or newer with npm
+* A C++ compiler, make and python3 to build the hashing module
 
-Please join our Discord to follow development. Any support questions can be answered here quickly as well.
-
-https://discord.gg/4mVaTsH
-
-# Usage
-
-#### Requirements
-* Coin daemon(s) (find the coin's repo and build latest version from source)
-* [Node.js](http://nodejs.org/) v8.11 ([follow these installation instructions](https://github.com/nodejs/node))
-* [Redis](http://redis.io/) key-value store v2.6+ ([follow these instructions](http://redis.io/topics/quickstart))
-
-##### Seriously
-These are legitimate requirements. If you use old versions of Node.js or Redis that may come with your system package manager then you will have problems. Follow the linked instructions to get the last stable versions.
-
-[**Redis security warning**](http://redis.io/topics/security): be sure firewall access to redis - an easy way is to
-include `bind 127.0.0.1` in your `redis.conf` file. Also it's a good idea to learn about and understand software that
-you are using - a good place to start with redis is [data persistence](http://redis.io/topics/persistence).
-
-#### 0) Setting up coin daemon
-Follow the build/install instructions for your coin daemon. Your coin.conf file should end up looking something like this:
-```
-daemon=1
-rpcuser=zclassicrpc
-rpcpassword=securepassword
-rpcport=8232
-```
-For redundancy, its recommended to have at least two daemon instances running in case one drops out-of-sync or offline,
-all instances will be polled for block/transaction updates and be used for submitting blocks. Creating a backup daemon
-involves spawning a daemon using the `-datadir=/backup` command-line argument which creates a new daemon instance with
-it's own config directory and coin.conf file. Learn about the daemon, how to use it and how it works if you want to be
-a good pool operator. For starters be sure to read:
-   * https://en.bitcoin.it/wiki/Running_bitcoind
-   * https://en.bitcoin.it/wiki/Data_directory
-   * https://en.bitcoin.it/wiki/Original_Bitcoin_client/API_Calls_list
-   * https://en.bitcoin.it/wiki/Difficulty
-
-
-#### 1) Downloading & Installing
-
-Clone the repository and run `npm update` for all the dependencies to be installed:
+On Debian, Ubuntu or Armbian:
 
 ```bash
-sudo apt-get install build-essential libsodium-dev npm libboost-all-dev
-sudo npm install n -g
-sudo n stable
-git clone https://github.com/s-nomp/s-nomp.git s-nomp
-cd s-nomp
-npm update
-npm install
+sudo apt-get install build-essential python3 nodejs npm
 ```
 
-##### Pool config
-Take a look at the example json file inside the `pool_configs` directory. Rename it to `zclassic.json` and change the
-example fields to fit your setup.
+## Installation
 
-```
-Please Note that: 1 Difficulty is actually 8192, 0.125 Difficulty is actually 1024.
-
-Whenever a miner submits a share, the pool counts the difficulty and keeps adding them as the shares. 
-
-ie: Miner 1 mines at 0.1 difficulty and finds 10 shares, the pool sees it as 1 share. Miner 2 mines at 0.5 difficulty and finds 5 shares, the pool sees it as 2.5 shares. 
+```bash
+git clone https://github.com/dwarner5522/verus-datum-cli verus-stratum
+cd verus-stratum
+npm install        # builds the verushash module
+npm test           # optional: checks the build against real Verus blocks
+cp config_example.json config.json
 ```
 
+`npm test` does not need a daemon. It is worth running once on a new machine: it proves that the
+hashing module built for that CPU produces the same block hashes as the Verus network.
 
-##### [Optional, recommended] Setting up blocknotify
-1. In `config.json` set the port and password for `blockNotifyListener`
-2. In your daemon conf file set the `blocknotify` command to use:
+## Setting up the Verus daemon
+
+`VRSC.conf` (usually `~/.komodo/VRSC/VRSC.conf`) needs RPC access for the stratum server:
+
 ```
-node [path to cli.js] [coin name in config] [block hash symbol]
-```
-Example: inside `zclassic.conf` add the line
-```
-blocknotify=node /home/user/s-nomp/scripts/cli.js blocknotify zclassic %s
+server=1
+rpcuser=rpcuser
+rpcpassword=use-a-long-random-password
+rpcport=27486
+rpcallowip=127.0.0.1
+mineraddress=<R-address>
 ```
 
-Alternatively, you can use a more efficient block notify script written in pure C. Build and usage instructions
-are commented in [scripts/blocknotify.c](scripts/blocknotify.c).
+**Where the block reward goes is decided by the daemon, not by this server or by the user name of
+a miner.** The daemon builds the coinbase transaction, so make sure it pays an address you control,
+for example with `mineraddress=<your R-address>` in `VRSC.conf` (see `verusd -help`). Without
+it the reward goes to an address of the daemon's wallet.
 
+Optional: the server polls the daemon for new work once per second. To be told about new blocks
+immediately, add this to `VRSC.conf`:
 
-#### 3) Start the portal
+```
+blocknotify=node /path/to/verus-stratum/scripts/cli.js blocknotify %s
+```
+
+## Configuration
+
+Edit `config.json`:
+
+| Option | Meaning |
+| --- | --- |
+| `daemon` | host, port, user and password of the Verus daemon RPC interface |
+| `ports` | stratum ports the miners connect to, each with a starting difficulty `diff` and optional `varDiff` settings |
+| `stratumHost` | address to listen on, `0.0.0.0` for all interfaces |
+| `cliPort`, `cliHost` | where the running server listens for `scripts/cli.js`, keep it on `127.0.0.1` |
+| `logLevel` | `debug` (every share), `info`, `warning` or `error` |
+| `blockRefreshInterval` | how often the daemon is asked for new work, in milliseconds |
+| `jobRebroadcastTimeout` | resend work to the miners after this many seconds without a change |
+| `connectionTimeout` | drop a miner that has not submitted a share for this many seconds |
+| `hashrateWindow` | number of seconds the "current" hashrate is averaged over |
+| `statusInterval` | write a one line summary to the log every this many seconds, 0 to turn it off |
+| `banning` | optionally ban addresses that send mostly invalid shares |
+
+One unit of difficulty is 8192 hashes. With the default `diff` of 8192 a share is about 67 million
+hashes, one every 13 seconds or so for a board doing 5 MH/s. `varDiff` then adjusts each miner so it
+submits a share about every `targetTime` seconds, slow boards end up with a lower difficulty.
+
+## Running
 
 ```bash
 npm start
 ```
 
-###### Optional enhancements for your awesome new mining pool server setup:
-* Use something like [forever](https://github.com/nodejitsu/forever) to keep the node script running
-in case the master process crashes. 
-* Use something like [redis-commander](https://github.com/joeferner/redis-commander) to have a nice GUI
-for exploring your redis database.
-* Use something like [logrotator](http://www.thegeekstuff.com/2010/07/logrotate-examples/) to rotate log 
-output from s-nomp.
-* Use [New Relic](http://newrelic.com/) to monitor your s-nomp instance and server performance.
+When started in a terminal the server shows a `verus>` prompt:
 
+```
+verus> miners
+WORKER  IP            STATUS   CONNECTED  DIFF     RATE 5m    RATE 1h  ACCEPTED  REJECTED  STALE  LAST SHARE
+opi5-1  192.168.1.21  online      2h 13m  9.22 k  5.12 MH/s  5.08 MH/s       532         1      2      4s ago
+opi5-2  192.168.1.22  online      2h 13m  8.19 k  4.97 MH/s  5.01 MH/s       519         0      1     11s ago
+opi5-3  192.168.1.23  OFFLINE          -       -    0.00 H/s  3.10 MH/s       301         0      0     25m ago
 
-#### Upgrading s-nomp
-When updating s-nomp to the latest code its important to not only `git pull` the latest from this repo, but to also update
-the `node-stratum-pool` and `node-multi-hashing` modules, and any config files that may have been changed.
-* Inside your s-nomp directory (where the init.js script is) do `git pull` to get the latest s-nomp code.
-* Remove the dependenices by deleting the `node_modules` directory with `rm -r node_modules`.
-* Run `npm update` to force updating/reinstalling of the dependencies.
-* Compare your `config.json` and `pool_configs/coin.json` configurations to the latest example ones in this repo or the ones in the setup instructions where each config field is explained. <b>You may need to modify or add any new changes.</b>
+2 miners online, 1 offline - total hashrate 10.09 MH/s (5m), 13.19 MH/s (1h)
+```
 
+| Command | |
+| --- | --- |
+| `miners` | the miners that are or were connected: address, time connected, difficulty, hashrates, share counts |
+| `hashrate` | hashrate of the pool and of each miner over the last minutes, the last hour and since it first connected, plus its best share |
+| `status` | daemon and network state, current job, total hashrate, share and block counts, average time to find a block |
+| `blocks` | blocks found by this server (also kept in `blocks.log`) |
+| `loglevel [level]` | show or change the log level while running |
+| `stop` | shut down (`quit`, `exit`, Ctrl+C and Ctrl+D do the same) |
+| `help` | list the commands |
 
-Credits
--------
-### s-nomp
-* [egyptianbman](https://github.com/egyptianbman)
-* [nettts](https://github.com/nettts)
-* You belong here. Join us!
+The same commands work from any other shell on the machine while the server is running, which is how
+you query it when it runs in the background:
 
-### z-nomp
-* [Joshua Yabut / movrcx](https://github.com/joshuayabut)
-* [Aayan L / anarch3](https://github.com/aayanl)
-* [hellcatz](https://github.com/hellcatz)
+```bash
+node scripts/cli.js miners
+node scripts/cli.js hashrate
+watch -n 10 node scripts/cli.js miners
+```
 
-### NOMP
-* [Matthew Little / zone117x](https://github.com/zone117x) - developer of NOMP
-* [Jerry Brady / mintyfresh68](https://github.com/bluecircle) - got coin-switching fully working and developed proxy-per-algo feature
-* [Tony Dobbs](http://anthonydobbs.com) - designs for front-end and created the NOMP logo
-* [LucasJones](//github.com/LucasJones) - got p2p block notify working and implemented additional hashing algos
-* [vekexasia](//github.com/vekexasia) - co-developer & great tester
-* [TheSeven](//github.com/TheSeven) - answering an absurd amount of my questions and being a very helpful gentleman
-* [UdjinM6](//github.com/UdjinM6) - helped implement fee withdrawal in payment processing
-* [Alex Petrov / sysmanalex](https://github.com/sysmanalex) - contributed the pure C block notify script
-* [svirusxxx](//github.com/svirusxxx) - sponsored development of MPOS mode
-* [icecube45](//github.com/icecube45) - helping out with the repo wiki
-* [Fcases](//github.com/Fcases) - ordered me a pizza <3
-* Those that contributed to [node-stratum-pool](//github.com/zone117x/node-stratum-pool#credits)
+Hashrates are estimated from the shares a miner submits, so they jump around for the first minutes and
+will never exactly match what the miner itself reports. A miner that drops off the network stays in
+the list as `OFFLINE` for a day so you notice it.
 
-License
--------
-Released under the MIT License. See LICENSE file.
+### Running as a service
+
+`scripts/verus-stratum.service` is an example systemd unit. Adjust the user and paths in it, then:
+
+```bash
+sudo cp scripts/verus-stratum.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now verus-stratum
+journalctl -u verus-stratum -f      # log
+node scripts/cli.js miners          # console commands
+```
+
+The server keeps trying when the daemon is not reachable yet, so the start order at boot does not matter.
+
+## Connecting the miners
+
+Point each miner at the machine running the server. The user name is free text and only used to tell
+the miners apart; with `<anything>.<name>` the part after the dot is what the `miners` command shows.
+For ccminer:
+
+```bash
+./ccminer -a verus -o stratum+tcp://192.168.1.10:9999 -u solo.opi5-1 -p x -t 8
+```
+
+Give every board its own name. Miners with the same name are still listed separately as long as
+their IP addresses differ.
+
+## Notes
+
+* All statistics live in memory and start from zero when the server is restarted. Only found blocks
+  are written to disk (`blocks.log`).
+* There is no authentication or TLS on the stratum port. Keep it on your local network.
+* Solo mining pays nothing until one of your miners finds a block. `status` shows how long that takes
+  on average with your current hashrate.
+
+## Credits and license
+
+Based on [s-nomp](https://github.com/s-nomp/s-nomp) / [VerusCoin s-nomp](https://github.com/VerusCoin/s-nomp)
+(MIT), which is based on NOMP by Matthew Little.
+
+`lib/stratum` is derived from [VerusCoin/node-stratum-pool](https://github.com/VerusCoin/node-stratum-pool),
+which is licensed under the GPL version 2. Because that code is now part of this repository instead of an
+external dependency, the server as a whole is distributed under the GPL version 2.
+
+`native/verushash` is derived from [VerusCoin/verushash-node](https://github.com/VerusCoin/verushash-node)
+(VerusHash by Michael Toutonghi, Haraka by kste, CLHash by Daniel Lemire and Owen Kaser), reduced to the
+portable code path; see `native/verushash/LICENSE.verushash` and the headers of the source files.
