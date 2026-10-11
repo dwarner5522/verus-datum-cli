@@ -12,6 +12,8 @@
         "password": "rpcpassword"
     },
 
+    "payoutAddress": "",
+
     "stratumHost": "0.0.0.0",
     "ports": {
         "9999": {

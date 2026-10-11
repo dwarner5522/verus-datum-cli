@@ -22,6 +22,7 @@ var BlockTemplate = require('../lib/stratum/blockTemplate.js');
 var Stats = require('../lib/stats.js');
 var Commands = require('../lib/commands.js');
 var PoolLogger = require('../lib/logger.js');
+var payout = require('../lib/stratum/payout.js');
 
 var util = Stratum.util;
 
@@ -114,6 +115,59 @@ check('unusable block templates are detected', function () {
 
 /* ---------------------------------------------------------------------------------------- */
 
+console.log('payout address');
+
+// the address of the key the coinbase of the template fixture pays to (as pay-to-pubkey)
+var PAYOUT_ADDRESS = 'RD1F8kN86VdzSjTPnSAxSuDdT8ceeMyLsh';
+var PAYOUT_SCRIPT = '76a91428dc6606e12dce6363cd4faa29267a4a4ed56b0a88ac';
+
+// the template fixture with its reward paid to the given output script
+var templatePaying = function (scriptHex) {
+    var template = JSON.parse(JSON.stringify(fixtures.template));
+    var outputs = payout.transactionOutputs(template.coinbasetxn.data);
+    var oldScript = outputs[0].script.toString('hex');
+    var data = template.coinbasetxn.data.replace(
+        util.varIntBuffer(oldScript.length / 2).toString('hex') + oldScript,
+        util.varIntBuffer(scriptHex.length / 2).toString('hex') + scriptHex);
+    assert.notStrictEqual(data, template.coinbasetxn.data);
+    template.coinbasetxn.data = data;
+    template.coinbasetxn.hash = util.reverseBuffer(util.sha256d(Buffer.from(data, 'hex'))).toString('hex');
+    return template;
+};
+
+check('an R-address is turned into its output script', function () {
+    assert.strictEqual(payout.addressToScript(PAYOUT_ADDRESS).toString('hex'), PAYOUT_SCRIPT);
+});
+
+check('addresses with typing errors or of another kind are refused', function () {
+    ['RD1F8kN86VdzSjTPnSAxSuDdT8ceeMyLsi', 'RD1F8kN86VdzSjTPnSAxSuDdT8ceeMyLs', '', null, 'mike@',
+        'i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV', '1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2'].forEach(function (address) {
+        assert.throws(function () { payout.addressToScript(address); }, /R-address/, String(address));
+    });
+});
+
+check('the outputs of a real coinbase transaction are read', function () {
+    var outputs = payout.transactionOutputs(fixtures.template.coinbasetxn.data);
+    assert.strictEqual(outputs.length, 2);
+    assert.strictEqual(outputs[0].value, 300053839n);
+    assert.strictEqual(outputs[0].script.length, 35);
+    assert.strictEqual(outputs[1].value, 0n);
+});
+
+check('a coinbase is only accepted when all of its value goes to the payout address', function () {
+    var script = Buffer.from(PAYOUT_SCRIPT, 'hex');
+    // the fixture pays the daemon's own wallet key
+    assert.ok(/different address/.test(payout.verifyCoinbase(fixtures.template.coinbasetxn.data, script)));
+    assert.strictEqual(payout.verifyCoinbase(templatePaying(PAYOUT_SCRIPT).coinbasetxn.data, script), null);
+    assert.ok(/different address/.test(payout.verifyCoinbase(
+        templatePaying('76a914' + '11'.repeat(20) + '88ac').coinbasetxn.data, script)));
+    assert.ok(/could not read/.test(payout.verifyCoinbase(fixtures.template.coinbasetxn.data.slice(0, 120), script)));
+    assert.ok(/could not read/.test(payout.verifyCoinbase('', script)));
+});
+
+
+/* ---------------------------------------------------------------------------------------- */
+
 // Fake Verus daemon, just enough JSON-RPC for the server to run
 var FakeDaemon = function () {
     var _this = this;
@@ -131,7 +185,8 @@ var FakeDaemon = function () {
         getmininginfo: function () {
             return {networkhashps: 631222660445, difficulty: 2402763754011.23};
         },
-        getblocktemplate: function () {
+        getblocktemplate: function (params) {
+            _this.templateRequest = params[0];
             return _this.template;
         },
         submitmergedblock: function (params) {
@@ -608,13 +663,117 @@ var runServerTest = function (done) {
     });
 };
 
+// A server with a payout address: asks the daemon to pay it and refuses work that pays elsewhere
+var runPayoutTest = function (done) {
+    console.log('stratum server with a payout address');
+
+    var daemon = new FakeDaemon();
+    var logLines = [];
+    var started = false;
+
+    daemon.start(function () {
+        freePort(function (stratumPort) {
+            var config = {
+                coin: {name: 'verus', symbol: 'vrsc', algorithm: 'verushash'},
+                daemon: {host: '127.0.0.1', port: daemon.port, user: 'u', password: 'p'},
+                payoutAddress: PAYOUT_ADDRESS,
+                stratumHost: '127.0.0.1',
+                ports: {},
+                blockRefreshInterval: 100,
+                jobRebroadcastTimeout: 55,
+                connectionTimeout: 600,
+                banning: {enabled: false}
+            };
+            config.ports[stratumPort] = {diff: 0.001};
+
+            var logger = new PoolLogger({logLevel: 'debug', logColors: false});
+            logger.output = function (line) { logLines.push(line); };
+            var stats = new Stats({hashrateWindow: 300});
+            var pool = Stratum.createPool(config, function (ip, port, workerName, password, callback) {
+                callback({error: null, authorized: true, disconnect: false});
+            });
+            var commands = new Commands({config: config, logger: logger, stats: stats, pool: pool, shutdown: function () {}});
+            var json = function (callback) {
+                commands.execute('json', [], function (text) { callback(JSON.parse(text)); });
+            };
+
+            pool.on('log', function (severity, text) {
+                logger[severity]('Pool', text);
+            }).on('started', function () {
+                started = true;
+                check('work is handed out once the template pays the payout address', function () {
+                    assert.strictEqual(pool.payout.verified, true);
+                    assert.strictEqual(pool.payout.error, null);
+                });
+                var miner = new TestMiner(stratumPort, 'solo.opi5-1');
+                miner.connect(function () {
+                    // a template that pays elsewhere again (the daemon caches them) must not replace the job
+                    var goodJobId = miner.job[0];
+                    var bad = templatePaying('76a914' + '22'.repeat(20) + '88ac');
+                    bad.height++;
+                    bad.previousblockhash = 'ab'.repeat(32);
+                    daemon.template = bad;
+                    setTimeout(function () {
+                        check('a later template that pays elsewhere is not handed out', function () {
+                            assert.strictEqual(pool.payout.verified, false);
+                            assert.strictEqual(pool.jobManager.currentJob.rpcData.height, fixtures.template.height);
+                            assert.strictEqual(miner.job[0], goodJobId);
+                        });
+                        json(function (state) {
+                            check('the json command reports the whole state', function () {
+                                assert.strictEqual(state.payout.address, PAYOUT_ADDRESS);
+                                assert.strictEqual(state.payout.verified, false);
+                                assert.ok(/different address/.test(state.payout.error));
+                                assert.strictEqual(state.stratum.listening, true);
+                                assert.deepStrictEqual(state.stratum.ports, [stratumPort]);
+                                assert.strictEqual(state.daemon.reachable, true);
+                                assert.strictEqual(state.daemon.networkHashrate, 631222660445);
+                                assert.strictEqual(state.job.height, fixtures.template.height);
+                                assert.strictEqual(state.job.reward, 3);
+                                assert.strictEqual(state.miners.online, 1);
+                                assert.strictEqual(state.miners.list[0].name, 'opi5-1');
+                                assert.ok(Array.isArray(state.blocks));
+                            });
+                            miner.close();
+                            pool.stop();
+                            daemon.close();
+                            done();
+                        });
+                    }, 400);
+                });
+            });
+
+            pool.start();
+
+            // the fake daemon starts out with the fixture, which pays its own wallet
+            setTimeout(function () {
+                check('the daemon is asked to pay the payout address', function () {
+                    var expected = {};
+                    expected[PAYOUT_ADDRESS] = 1;
+                    assert.deepStrictEqual(daemon.templateRequest.miningdistribution, expected);
+                });
+                check('no work is handed out while the template pays a different address', function () {
+                    assert.strictEqual(started, false);
+                    assert.strictEqual(pool.stratumServer, undefined);
+                    assert.strictEqual(pool.payout.verified, false);
+                    assert.ok(/different address/.test(pool.payout.error));
+                    assert.ok(logLines.some(function (line) { return /does not pay RD1F8k/.test(line); }));
+                });
+                daemon.template = templatePaying(PAYOUT_SCRIPT);
+            }, 600);
+        });
+    });
+};
+
 var timeout = setTimeout(function () {
     console.log('FAILED - test timed out');
     process.exit(1);
-}, 60000);
+}, 90000);
 
 runServerTest(function () {
-    clearTimeout(timeout);
-    console.log('\nAll ' + passed + ' checks passed');
-    process.exit(0);
+    runPayoutTest(function () {
+        clearTimeout(timeout);
+        console.log('\nAll ' + passed + ' checks passed');
+        process.exit(0);
+    });
 });

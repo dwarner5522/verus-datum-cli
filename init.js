@@ -59,6 +59,14 @@ else {
             configErrors.push('stratum port ' + port + ' needs a "diff" greater than 0');
     });
 }
+if (config.payoutAddress) {
+    try {
+        require('./lib/stratum/payout.js').addressToScript(config.payoutAddress);
+    }
+    catch (e) {
+        configErrors.push('"payoutAddress": ' + e.message);
+    }
+}
 if (configErrors.length > 0) {
     console.log('Invalid configuration in ' + configPath + ':\n  ' + configErrors.join('\n  '));
     process.exit(1);
@@ -83,7 +91,7 @@ var logger = new PoolLogger({
 
 var stats = new Stats({
     hashrateWindow: config.hashrateWindow,
-    blocksFile: path.join(__dirname, 'blocks.log')
+    blocksFile: config.blocksFile ? path.resolve(path.dirname(configPath), config.blocksFile) : path.join(__dirname, 'blocks.log')
 });
 
 
@@ -194,4 +202,8 @@ process.on('uncaughtException', function (err) {
 });
 
 logger.info('Master', 'Verus solo stratum server starting, config ' + configPath);
+if (config.payoutAddress)
+    logger.info('Master', 'Block rewards are paid to ' + config.payoutAddress);
+else
+    logger.warning('Master', 'No payoutAddress in the config - block rewards go to the address the daemon is set up with');
 pool.start();

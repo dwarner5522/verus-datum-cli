@@ -46,13 +46,23 @@ rpcuser=rpcuser
 rpcpassword=use-a-long-random-password
 rpcport=27486
 rpcallowip=127.0.0.1
-mineraddress=<R-address>
 ```
 
-**Where the block reward goes is decided by the daemon, not by this server or by the user name of
-a miner.** The daemon builds the coinbase transaction, so make sure it pays an address you control,
-for example with `mineraddress=<your R-address>` in `VRSC.conf` (see `verusd -help`). Without
-it the reward goes to an address of the daemon's wallet.
+## Where the block reward goes
+
+Set `payoutAddress` in `config.json` to the R-address that should receive the block rewards. The
+server then asks the daemon to pay that address with every request for work, and checks each block
+template it gets back: work whose reward would go anywhere else is never handed to a miner. `status`
+shows the address and whether the current template pays it.
+
+**The user name of a miner has no influence on where the reward goes.** Without a `payoutAddress`
+the daemon decides: the address given with `mineraddress=<R-address>` in `VRSC.conf`, or else an
+address of the daemon's own wallet.
+
+The daemon keeps a block template for a few seconds and gives it to whoever asks next. If another
+program gets block templates from the same daemon with a different payout, the two can receive each
+other's templates. This server then waits (`status` says so) instead of mining for the other address,
+but the other program may not check. Use one daemon per payout address.
 
 Optional: the server polls the daemon for new work once per second. To be told about new blocks
 immediately, add this to `VRSC.conf`:
@@ -68,6 +78,8 @@ Edit `config.json`:
 | Option | Meaning |
 | --- | --- |
 | `daemon` | host, port, user and password of the Verus daemon RPC interface |
+| `payoutAddress` | R-address the block rewards are paid to, see above. Leave empty to let the daemon decide |
+| `blocksFile` | where found blocks are recorded, relative to the config file. Default: `blocks.log` next to the server |
 | `ports` | stratum ports the miners connect to, each with a starting difficulty `diff` and optional `varDiff` settings |
 | `stratumHost` | address to listen on, `0.0.0.0` for all interfaces |
 | `cliPort`, `cliHost` | where the running server listens for `scripts/cli.js`, keep it on `127.0.0.1` |
@@ -107,6 +119,7 @@ opi5-3  192.168.1.23  OFFLINE          -       -    0.00 H/s  3.10 MH/s       30
 | `hashrate` | hashrate of the pool and of each miner over the last minutes, the last hour and since it first connected, plus its best share |
 | `status` | daemon and network state, current job, total hashrate, share and block counts, average time to find a block |
 | `blocks` | blocks found by this server (also kept in `blocks.log`) |
+| `json` | everything above as one JSON object, for scripts and dashboards |
 | `loglevel [level]` | show or change the log level while running |
 | `stop` | shut down (`quit`, `exit`, Ctrl+C and Ctrl+D do the same) |
 | `help` | list the commands |

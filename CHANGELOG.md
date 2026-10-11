@@ -1,5 +1,11 @@
 # Changelog
 
+### 1.1.0
+  * New `payoutAddress` option: the daemon is asked to pay block rewards to this R-address, and block templates
+    that pay anywhere else are not handed out. `mineraddress` in `VRSC.conf` is no longer needed
+  * New `json` command with the state of the server, daemon, miners and blocks as one JSON object
+  * New `blocksFile` option for where found blocks are recorded
+
 ### 1.0.0 - Verus solo stratum server
   * Reduced s-nomp to a single process, command line only solo mining stratum server for VerusCoin
   * Removed the website, API, payment processing, redis, MPOS mode, profit switching, clustering and all other coins
