@@ -71,6 +71,18 @@ immediately, add this to `VRSC.conf`:
 blocknotify=node /path/to/verus-stratum/scripts/cli.js blocknotify %s
 ```
 
+## Merge mining PBaaS chains
+
+Nothing has to be set up in this server. Run the daemon of a PBaaS chain (for example
+`verusd -chain=vDEX`) on the same machine as the VRSC daemon and switch mining on in it with
+`verus -chain=vDEX setgenerate true 1`. It then registers its blocks with the VRSC daemon, which
+includes them in the work this server hands out. A share that is good enough for the PBaaS chain but
+not for VRSC is submitted as well, and the VRSC daemon passes it on.
+
+`status` shows how many chains the current work includes. The block reward of a PBaaS chain goes to
+the address its own daemon is set up with (`setminingdistribution` or `mineraddress`), not to the
+`payoutAddress` above.
+
 ## Configuration
 
 Edit `config.json`:

@@ -1,5 +1,9 @@
 # Changelog
 
+### 1.2.0
+  * Merge mining of PBaaS chains is reported: the `status` and `json` commands show how many chains the current
+    work includes and the difficulty a share has to reach to count for the easiest of them
+
 ### 1.1.0
   * New `payoutAddress` option: the daemon is asked to pay block rewards to this R-address, and block templates
     that pay anywhere else are not handed out. `mineraddress` in `VRSC.conf` is no longer needed

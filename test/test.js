@@ -104,6 +104,21 @@ check('a header built from a real block template carries valid merge mining data
     assert.notStrictEqual(hash.toString('hex'), 'ff'.repeat(32));
 });
 
+check('merge-mined chains are read from the template', function () {
+    var job = new BlockTemplate('1', fixtures.template);
+    assert.strictEqual(job.mergedChains, 0);
+    assert.strictEqual(job.mergedDifficulty, job.difficulty);
+
+    // two PBaaS chains added by the daemon, the easier one at a tenth of the difficulty
+    var template = JSON.parse(JSON.stringify(fixtures.template));
+    template.solution = template.solution.substr(0, 10) + '03' + template.solution.substr(12);
+    template.mergeminebits = '1b3f0cd2';
+    job = new BlockTemplate('2', template);
+    assert.strictEqual(job.mergedChains, 2);
+    assert.ok(job.merged_target > job.target);
+    assert.ok(Math.abs(job.difficulty / job.mergedDifficulty - 10) < 0.01);
+});
+
 check('unusable block templates are detected', function () {
     assert.ok(BlockTemplate.validate(null));
     assert.ok(BlockTemplate.validate({}));
